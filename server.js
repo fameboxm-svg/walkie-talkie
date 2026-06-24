@@ -96,6 +96,7 @@ io.on('connection', (socket) => {
 
     socket.to(roomCode).emit('user-joined', {
       username,
+      socketId: socket.id,
       users: Array.from(room.users.values()).map(u => u.username)
     });
 
@@ -242,4 +243,4 @@ app.get('/api/ice', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🎙️ Walkie-Talkie server running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`🎙️ Walkie-Talkie server running on http://0.0.0.0:${PORT}`));

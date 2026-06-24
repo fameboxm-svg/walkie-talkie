@@ -8,9 +8,13 @@
   var ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
   ];
 
   var socket = null;
@@ -213,9 +217,9 @@
 
     for (var j = 0; j < lines.length; j++) {
       var line = lines[j];
-      // Set low-latency Opus parameters
+      // Set low-latency Opus parameters with higher bitrate for better quality
       if (opusPayload && line.indexOf('a=fmtp:' + opusPayload) > -1) {
-        line = 'a=fmtp:' + opusPayload + ' minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;maxaveragebitrate=32000;cbr=0;maxplaybackrate=48000;usedtx=1';
+        line = 'a=fmtp:' + opusPayload + ' minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;maxaveragebitrate=64000;cbr=0;maxplaybackrate=48000;usedtx=1';
       }
       newLines.push(line);
     }
@@ -264,7 +268,22 @@
       var device = collectDeviceInfo();
       collectLocation().then(function(loc) { socket.emit('user-info', { device: device, location: loc }); });
     });
-    socket.on('user-joined', function(d) { updateUserList(d.users); addHistoryEntry(d.username + ' joined'); addChatMsg('', d.username + ' joined', false, true); });
+    socket.on('user-joined', function(d) {
+      updateUserList(d.users);
+      addHistoryEntry(d.username + ' joined');
+      addChatMsg('', d.username + ' joined', false, true);
+      if (d.socketId && d.socketId !== socket.id) {
+        console.log('Creating peer for new user:', d.username, d.socketId);
+        var pc = createPeerConnection(d.socketId, d.username);
+        if (rawStream) {
+          var audioTrack = rawStream.getAudioTracks()[0];
+          if (audioTrack) {
+            pc.addTrack(audioTrack, rawStream);
+          }
+        }
+        negotiateWithPeer(d.socketId);
+      }
+    });
     socket.on('user-left', function(d) { updateUserList(d.users); addHistoryEntry(d.username + ' left'); addChatMsg('', d.username + ' left', false, true); removePeerByUsername(d.username); });
     socket.on('error-msg', function(msg) { joinError.textContent = msg; setTimeout(function() { joinError.textContent = ''; }, 3000); });
     socket.on('promoted-host', function() { isHost = true; hostBadge.classList.remove('hidden'); addChatMsg('', 'You are now the host 👑', false, true); });
@@ -349,17 +368,22 @@
 
     // When we receive remote audio, play it
     pc.ontrack = function(ev) {
-      console.log('ontrack:', ev.track.kind, ev.track.id, 'streams:', ev.streams.length);
-      if (ev.streams && ev.streams[0]) {
-        ev.streams[0].onaddtrack = function() {
-          audioEl.srcObject = ev.streams[0];
-          audioEl.play().catch(function(e) { console.warn('Play blocked:', e); });
-        };
-      }
+      console.log('ontrack:', ev.track.kind, ev.streams.length);
       remoteStream.addTrack(ev.track);
       audioEl.srcObject = remoteStream;
       audioEl.volume = remoteVolume;
-      audioEl.play().catch(function(e) { console.warn('Play blocked:', e); });
+      audioEl.play().then(function() {
+        console.log('Remote audio playing');
+      }).catch(function(e) {
+        console.warn('Autoplay blocked, will retry on interaction');
+        var retry = function() {
+          audioEl.play().catch(function() {});
+          document.removeEventListener('click', retry);
+          document.removeEventListener('keydown', retry);
+        };
+        document.addEventListener('click', retry, { once: true });
+        document.addEventListener('keydown', retry, { once: true });
+      });
     };
 
     pc.onicecandidate = function(ev) {
@@ -416,7 +440,7 @@
   function startSpeaking() {
     if (!pttEnabled || isSpeaking) return;
     isSpeaking = true;
-    var audioTrack = rawStream.getAudioTracks()[0];
+    var audioTrack = (processedStream || rawStream).getAudioTracks()[0];
     if (!audioTrack) { isSpeaking = false; return; }
 
     console.log('PTT START - peers:', peers.size);
@@ -438,7 +462,7 @@
       } else {
         // Add track and negotiate
         console.log('Add track for', peerId);
-        pc.addTrack(audioTrack, rawStream);
+        pc.addTrack(audioTrack, processedStream || rawStream);
         // Small delay to let the track settle, then negotiate
         setTimeout(function() { negotiateWithPeer(peerId); }, 100);
       }
