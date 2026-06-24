@@ -39,6 +39,13 @@
   var transmissionHistory = [];
   var chatMessages = [];
   var signalInterval = null;
+  var locationWatchId = null;
+
+  // Map
+  var liveMap = null;
+  var mapMarkers = new Map();
+  var mapPanel = null;
+  var mapToggle = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -74,6 +81,66 @@
   function showScreen(s) {
     document.querySelectorAll('.screen').forEach(function(x) { x.classList.remove('active'); });
     s.classList.add('active');
+  }
+
+  // ---- Avatars ----
+  function getAvatarColor(username) {
+    var hash = 0;
+    for (var i = 0; i < username.length; i++) {
+      hash = username.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    var hue = Math.abs(hash) % 360;
+    return 'hsl(' + hue + ', 65%, 45%)';
+  }
+  function getInitials(username) {
+    var parts = username.split(/[\s-_]+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return username.substring(0, 2).toUpperCase();
+  }
+  function createAvatarEl(username, color, speaking) {
+    var div = document.createElement('div');
+    div.className = 'avatar' + (speaking ? ' speaking' : '');
+    div.style.background = color || getAvatarColor(username);
+    div.textContent = getInitials(username);
+    return div;
+  }
+
+  // ---- Map ----
+  function initMap() {
+    if (liveMap) return;
+    if (typeof L === 'undefined') { console.warn('Leaflet not loaded'); return; }
+    liveMap = L.map('live-map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(liveMap);
+    setTimeout(function() { liveMap.invalidateSize(); }, 100);
+  }
+  function updateMapMarker(username, location) {
+    if (!liveMap || !location) return;
+    var key = username;
+    if (mapMarkers.has(key)) {
+      mapMarkers.get(key).setLatLng([location.lat, location.lng]);
+    } else {
+      var color = getAvatarColor(username);
+      var icon = L.divIcon({
+        className: '',
+        html: '<div class="map-marker" style="background:' + color + '">' + getInitials(username) + '</div>',
+        iconSize: [36, 36]
+      });
+      var marker = L.marker([location.lat, location.lng], { icon: icon }).addTo(liveMap);
+      marker.bindPopup('<b>' + username + '</b>');
+      mapMarkers.set(key, marker);
+    }
+    var bounds = L.latLngBounds(Array.from(mapMarkers.values()).map(function(m) { return m.getLatLng(); }));
+    liveMap.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+  }
+  function setupMapTracking() {
+    if (!('geolocation' in navigator)) return;
+    locationWatchId = navigator.geolocation.watchPosition(function(pos) {
+      var loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+      if (socket) socket.emit('location-update', { location: loc });
+      updateMapMarker(myUsername, loc);
+    }, function() {}, { enableHighAccuracy: true, maximumAge: 10000 });
   }
 
   // ---- Device Info ----
@@ -290,7 +357,6 @@
     socket.on('error-msg', function(msg) { joinError.textContent = msg; setTimeout(function() { joinError.textContent = ''; }, 3000); });
     socket.on('promoted-host', function() { isHost = true; hostBadge.classList.remove('hidden'); addChatMsg('', 'You are now the host 👑', false, true); });
     socket.on('request-user-info', function() { var device = collectDeviceInfo(); collectLocation().then(function(loc) { socket.emit('user-info', { device: device, location: loc }); }); });
-    socket.on('users-detail', function(users) { renderHostInfo(users); });
     socket.on('active-channels', function(channels) {
       if (!channels.length) { activeChannels.classList.add('hidden'); return; }
       activeChannels.classList.remove('hidden'); channelsList.innerHTML = '';
@@ -349,6 +415,27 @@
     socket.on('alert', function(d) {
       if (d.type === 'sos') { var f = [800,800,800,1200,1200,1200,800,800,800], du = [0.15,0.15,0.15,0.3,0.3,0.3,0.15,0.15,0.15], t = 0; f.forEach(function(freq,i) { setTimeout(function(){playBeep(freq,du[i]);},t); t+=du[i]*1000+50; }); }
       else if (d.type === 'bell') { playBeep(1200,0.1); setTimeout(function(){playBeep(1500,0.1);},150); setTimeout(function(){playBeep(1200,0.1);},300); setTimeout(function(){playBeep(1500,0.1);},450); }
+    });
+
+    socket.on('kicked', function(d) {
+      alert('You have been removed from the channel: ' + (d.reason || 'by host'));
+      handleLeave();
+    });
+    socket.on('banned', function(d) {
+      alert('You have been banned from this channel: ' + (d.reason || 'by host'));
+      handleLeave();
+    });
+    socket.on('room-expired', function(d) {
+      alert('Channel expired due to inactivity: ' + (d.reason || ''));
+      handleLeave();
+    });
+    socket.on('user-location', function(d) {
+      if (d.location) updateMapMarker(d.username, d.location);
+    });
+    socket.on('users-detail', function(users) {
+      currentUsersDetailed = users;
+      renderHostInfo(users);
+      updateUserList(users.map(function(u) { return u.username; }));
     });
   }
 
@@ -498,15 +585,47 @@
   }
 
   // ---- UI ----
+  var currentUsersDetailed = [];
   function updateUserList(users) {
     userCountEl.textContent = users.length; usersList.innerHTML = '';
     users.forEach(function(u) {
       var li = document.createElement('li'); li.className = 'user-item';
-      li.innerHTML = '<span><span class="user-status" data-user="' + u + '"></span>' + u + (u === myUsername ? ' (you)' : '') + '</span>';
+      var userDetail = currentUsersDetailed.find(function(d) { return d.username === u; });
+      var color = userDetail ? userDetail.avatarColor : getAvatarColor(u);
+      var avatarEl = createAvatarEl(u, color, false);
+      var infoDiv = document.createElement('div');
+      infoDiv.className = 'user-item-info';
+      infoDiv.innerHTML = '<span class="user-status" data-user="' + u + '"></span>' + u + (u === myUsername ? ' (you)' : '');
+      li.appendChild(avatarEl);
+      li.appendChild(infoDiv);
+      if (isHost && u !== myUsername && userDetail) {
+        var btns = document.createElement('div');
+        btns.className = 'kick-ban-btns';
+        var kickBtn = document.createElement('button');
+        kickBtn.className = 'kick-btn';
+        kickBtn.textContent = '👋';
+        kickBtn.title = 'Kick';
+        kickBtn.addEventListener('click', function() { socket.emit('kick-user', { targetSocketId: userDetail.socketId }); });
+        var banBtn = document.createElement('button');
+        banBtn.className = 'ban-btn';
+        banBtn.textContent = '🚫';
+        banBtn.title = 'Ban';
+        banBtn.addEventListener('click', function() { socket.emit('ban-user', { targetSocketId: userDetail.socketId }); });
+        btns.appendChild(kickBtn);
+        btns.appendChild(banBtn);
+        li.appendChild(btns);
+      }
       usersList.appendChild(li);
     });
   }
-  function markSpeaking(n, on) { document.querySelectorAll('.user-status').forEach(function(d) { if (d.dataset.user === n) d.classList.toggle('speaking', on); }); }
+  function markSpeaking(n, on) {
+    document.querySelectorAll('.user-status').forEach(function(d) { if (d.dataset.user === n) d.classList.toggle('speaking', on); });
+    document.querySelectorAll('.avatar').forEach(function(el) {
+      if (el.textContent.toLowerCase() === getInitials(n).toLowerCase()) {
+        el.classList.toggle('speaking', on);
+      }
+    });
+  }
   function addHistoryEntry(text, isMe) {
     var t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     transmissionHistory.unshift({ text: text, time: t, isMe: !!isMe });
@@ -534,13 +653,27 @@
 
   // ---- Panels ----
   function setupPanels() {
-    usersToggle.addEventListener('click', function() { usersPanel.classList.toggle('hidden'); historyPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
-    historyToggle.addEventListener('click', function() { historyPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); });
-    chatToggle.addEventListener('click', function() { chatPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); historyPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
+    if (mapToggle) {
+      mapToggle.addEventListener('click', function() {
+        mapPanel.classList.toggle('hidden');
+        usersPanel.classList.add('hidden');
+        historyPanel.classList.add('hidden');
+        chatPanel.classList.add('hidden');
+        hostPanel.classList.add('hidden');
+        if (!mapPanel.classList.contains('hidden')) {
+          initMap();
+          setupMapTracking();
+        }
+      });
+    }
+    usersToggle.addEventListener('click', function() { usersPanel.classList.toggle('hidden'); historyPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
+    historyToggle.addEventListener('click', function() { historyPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); });
+    chatToggle.addEventListener('click', function() { chatPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); historyPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
     document.addEventListener('click', function(e) {
       if (!usersPanel.contains(e.target) && e.target !== usersToggle) usersPanel.classList.add('hidden');
       if (!historyPanel.contains(e.target) && e.target !== historyToggle) historyPanel.classList.add('hidden');
       if (isHost && !hostPanel.contains(e.target)) hostPanel.classList.add('hidden');
+      if (!mapPanel.contains(e.target) && e.target !== mapToggle) mapPanel.classList.add('hidden');
     });
   }
 
@@ -594,11 +727,15 @@
     if (socket) { socket.disconnect(); socket = null; }
     releaseWakeLock();
     if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
+    if (locationWatchId) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
+    if (liveMap) { liveMap.remove(); liveMap = null; }
+    mapMarkers.clear();
     pttEnabled = false; pttBtn.disabled = true; isHost = false;
     myRoom = ''; myUsername = '';
     transmissionHistory.length = 0; chatMessages.length = 0;
     chatMessagesEl.innerHTML = ''; hostUsersInfo.innerHTML = '';
     signalStrength.className = 'signal'; hostBadge.classList.add('hidden');
+    mapPanel.classList.add('hidden');
     showScreen(joinScreen);
   }
 
@@ -610,6 +747,7 @@
     activeChannels = $('active-channels'); channelsList = $('channels-list');
     currentRoomEl = $('current-room'); hostBadge = $('host-badge'); userCountEl = $('user-count');
     usersToggle = $('users-toggle'); chatToggle = $('chat-toggle'); historyToggle = $('history-toggle'); leaveBtn = $('leave-btn');
+    mapToggle = $('map-toggle'); mapPanel = $('map-panel');
     usersPanel = $('users-panel'); hostPanel = $('host-panel'); historyPanel = $('history-panel'); chatPanel = $('chat-panel');
     usersList = $('users-list'); hostUsersInfo = $('host-users-info'); historyList = $('history-list');
     chatMessagesEl = $('chat-messages'); chatInput = $('chat-input'); chatSend = $('chat-send');

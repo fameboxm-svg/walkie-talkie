@@ -15,8 +15,9 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Room state: { [code]: { users: Map<id, {username, speaking, voiceEffect, isHost, device, location}>, password, createdAt } }
+// Room state: { [code]: { users: Map<id, {username, speaking, voiceEffect, isHost, device, location, avatarColor}>, password, createdAt, lastActivity, bannedUsers } }
 const rooms = new Map();
+const ROOM_TIMEOUT = parseInt(process.env.ROOM_TIMEOUT) || 30 * 60 * 1000; // 30 minutes default
 
 io.on('connection', (socket) => {
   let currentRoom = null;
@@ -40,7 +41,8 @@ io.on('connection', (socket) => {
       voiceEffect: u.voiceEffect || 'none',
       isHost: u.isHost,
       device: u.device || null,
-      location: u.location || null
+      location: u.location || null,
+      avatarColor: u.avatarColor || '#666666'
     }));
   }
 
@@ -58,9 +60,10 @@ io.on('connection', (socket) => {
     currentUser = username;
     socket.join(roomCode);
 
-    rooms.set(roomCode, { users: new Map(), password: password || null, createdAt: Date.now() });
+    rooms.set(roomCode, { users: new Map(), password: password || null, createdAt: Date.now(), lastActivity: Date.now(), bannedUsers: new Set() });
     const room = rooms.get(roomCode);
-    room.users.set(socket.id, { username, speaking: false, voiceEffect: 'none', isHost: true, device: null, location: null });
+    const avatarColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+    room.users.set(socket.id, { username, speaking: false, voiceEffect: 'none', isHost: true, device: null, location: null, avatarColor });
 
     socket.emit('room-joined', { roomCode, users: [username], isHost: true, isNew: true });
 
@@ -78,6 +81,7 @@ io.on('connection', (socket) => {
 
     const room = rooms.get(roomCode);
     if (room.password && room.password !== password) { socket.emit('error-msg', 'Invalid room password'); return; }
+    if (room.bannedUsers.has(socket.id)) { socket.emit('error-msg', 'You are banned from this channel'); return; }
 
     if (currentRoom) leaveRoom();
 
@@ -85,7 +89,8 @@ io.on('connection', (socket) => {
     currentUser = username;
     socket.join(roomCode);
 
-    room.users.set(socket.id, { username, speaking: false, voiceEffect: 'none', isHost: false, device: null, location: null });
+    const avatarColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+    room.users.set(socket.id, { username, speaking: false, voiceEffect: 'none', isHost: false, device: null, location: null, avatarColor });
 
     socket.emit('room-joined', {
       roomCode,
@@ -118,12 +123,58 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
+    room.lastActivity = Date.now();
     const user = room.users.get(socket.id);
     if (!user) return;
     if (device) user.device = device;
-    if (location) user.location = location;
+    if (location) {
+      user.location = location;
+      io.to(currentRoom).emit('user-location', { username: currentUser, location });
+    }
     const hostEntry = Array.from(room.users.entries()).find(([, u]) => u.isHost);
     if (hostEntry) io.to(hostEntry[0]).emit('users-detail', getRoomUsersDetailed(currentRoom));
+  });
+
+  // Location update (for live map)
+  socket.on('location-update', ({ location }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.lastActivity = Date.now();
+    const user = room.users.get(socket.id);
+    if (user && location) {
+      user.location = location;
+      socket.to(currentRoom).emit('user-location', { username: currentUser, location });
+    }
+  });
+
+  // Kick user (host only)
+  socket.on('kick-user', ({ targetSocketId }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const sender = room.users.get(socket.id);
+    if (!sender || !sender.isHost) return;
+    if (targetSocketId === socket.id) return; // Can't kick self
+    const target = room.users.get(targetSocketId);
+    if (!target) return;
+    io.to(targetSocketId).emit('kicked', { reason: 'Removed by host' });
+    io.to(targetSocketId).disconnect(true);
+  });
+
+  // Ban user (host only)
+  socket.on('ban-user', ({ targetSocketId }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const sender = room.users.get(socket.id);
+    if (!sender || !sender.isHost) return;
+    if (targetSocketId === socket.id) return;
+    const target = room.users.get(targetSocketId);
+    if (!target) return;
+    room.bannedUsers.add(targetSocketId);
+    io.to(targetSocketId).emit('banned', { reason: 'Banned by host' });
+    io.to(targetSocketId).disconnect(true);
   });
 
   // Voice effect
@@ -150,6 +201,7 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
+    room.lastActivity = Date.now();
     const user = room.users.get(socket.id);
     if (user) { user.speaking = true; socket.to(currentRoom).emit('speaking-start', { username: currentUser }); }
   });
@@ -158,6 +210,7 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
+    room.lastActivity = Date.now();
     const user = room.users.get(socket.id);
     if (user) { user.speaking = false; socket.to(currentRoom).emit('speaking-stop', { username: currentUser }); }
   });
@@ -165,6 +218,8 @@ io.on('connection', (socket) => {
   // Chat
   socket.on('chat-message', ({ text }) => {
     if (!currentRoom || !text) return;
+    const room = rooms.get(currentRoom);
+    if (room) room.lastActivity = Date.now();
     socket.to(currentRoom).emit('chat-message', { username: currentUser, text });
     // Special handling for SOS and Bell
     if (text.indexOf('SOS') > -1 || text.indexOf('EMERGENCY') > -1) {
@@ -249,6 +304,22 @@ app.get('/api/ice', (req, res) => {
     { urls: 'turn:open.relay.me:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
   ]);
 });
+
+// Channel expiration cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    if (now - room.lastActivity > ROOM_TIMEOUT) {
+      console.log(`[${code}] Room expired (inactive for ${Math.round((now - room.lastActivity) / 60000)} min)`);
+      for (const [id] of room.users) {
+        io.to(id).emit('room-expired', { reason: 'Channel expired due to inactivity' });
+        io.to(id).disconnect(true);
+      }
+      rooms.delete(code);
+      broadcastActiveChannels();
+    }
+  }
+}, 60000); // Check every 60 seconds
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`🎙️ Walkie-Talkie server running on http://0.0.0.0:${PORT}`));

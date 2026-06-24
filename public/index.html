@@ -9,6 +9,7 @@
   <title>Walkie-Talkie 📻</title>
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -60,6 +61,7 @@
           <span class="bar bar-3"></span>
           <span class="bar bar-4"></span>
         </div>
+        <button id="map-toggle" class="icon-btn" title="Map">🗺️</button>
         <button id="users-toggle" class="icon-btn" title="Users">👥 <span id="user-count">0</span></button>
         <button id="chat-toggle" class="icon-btn" title="Chat">💬</button>
         <button id="history-toggle" class="icon-btn" title="History">📋</button>
@@ -71,6 +73,12 @@
     <div id="users-panel" class="panel hidden">
       <h3>Online Operators</h3>
       <ul id="users-list"></ul>
+    </div>
+
+    <!-- Map Panel -->
+    <div id="map-panel" class="panel hidden">
+      <h3>🗺️ Live Map</h3>
+      <div id="live-map"></div>
     </div>
 
     <!-- Host Info Panel (host only) -->
@@ -170,6 +178,7 @@
     <div id="remote-audios"></div>
   </div>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/voice-fx.js"></script>
   <script src="/app.js"></script>

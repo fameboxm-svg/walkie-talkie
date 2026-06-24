@@ -840,6 +840,130 @@ header {
   }
 }
 
+/* ============================================
+   MAP PANEL
+   ============================================ */
+#map-panel {
+  max-height: 400px;
+}
+#live-map {
+  width: 100%;
+  height: 250px;
+  border-radius: var(--radius);
+  z-index: 1;
+}
+.map-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+  border: 3px solid white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.map-marker.speaking {
+  animation: marker-pulse 0.8s infinite;
+}
+@keyframes marker-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+/* ============================================
+   AVATARS
+   ============================================ */
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+.avatar.small {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}
+.avatar.speaking {
+  box-shadow: 0 0 0 3px var(--accent);
+  animation: avatar-pulse 0.8s infinite;
+}
+@keyframes avatar-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent); }
+  50% { box-shadow: 0 0 0 6px var(--accent-glow); }
+}
+
+/* User item with avatar */
+.user-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.user-item-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ============================================
+   KICK/BAN BUTTONS
+   ============================================ */
+.kick-ban-btns {
+  display: flex;
+  gap: 4px;
+}
+.kick-btn, .ban-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.kick-btn:hover {
+  background: rgba(233, 69, 96, 0.2);
+  border-color: var(--accent);
+}
+.ban-btn:hover {
+  background: rgba(255, 100, 0, 0.2);
+  border-color: #ff6400;
+}
+
+/* ============================================
+   ROOM EXPIRED OVERLAY
+   ============================================ */
+.room-expired-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  gap: 16px;
+}
+.room-expired-overlay h2 {
+  color: var(--accent);
+  font-size: 24px;
+}
+.room-expired-overlay p {
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 4px;
