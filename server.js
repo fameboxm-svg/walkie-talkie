@@ -15,9 +15,11 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Room state: { [code]: { users: Map<id, {username, speaking, voiceEffect, isHost, device, location, avatarColor}>, password, createdAt, lastActivity, bannedUsers } }
+// Room state: { [code]: { users, password, createdAt, lastActivity, bannedUsers, auditLog, voiceMessages, analytics, priority, encrypted } }
 const rooms = new Map();
-const ROOM_TIMEOUT = parseInt(process.env.ROOM_TIMEOUT) || 30 * 60 * 1000; // 30 minutes default
+const ROOM_TIMEOUT = parseInt(process.env.ROOM_TIMEOUT) || 30 * 60 * 1000;
+const MAX_VOICE_MESSAGES = 50;
+const MAX_AUDIT_LOG = 200;
 
 io.on('connection', (socket) => {
   let currentRoom = null;
@@ -46,6 +48,22 @@ io.on('connection', (socket) => {
     }));
   }
 
+  function addAuditLog(roomCode, event, username, details) {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+    room.auditLog.push({ time: Date.now(), event, username, details });
+    if (room.auditLog.length > MAX_AUDIT_LOG) room.auditLog.shift();
+    io.to(roomCode).emit('audit-event', { time: Date.now(), event, username, details });
+  }
+
+  function updateAnalytics(roomCode, type, value) {
+    const room = rooms.get(roomCode);
+    if (!room || !room.analytics) return;
+    if (type === 'message') room.analytics.messages++;
+    else if (type === 'voice') room.analytics.voiceMinutes += value || 0;
+    else if (type === 'join') { room.analytics.joins++; room.analytics.peakUsers = Math.max(room.analytics.peakUsers, room.users.size); }
+  }
+
   // CREATE room (host)
   socket.on('create-room', ({ roomCode, username, password }) => {
     roomCode = (roomCode || '').trim().toUpperCase();
@@ -60,7 +78,18 @@ io.on('connection', (socket) => {
     currentUser = username;
     socket.join(roomCode);
 
-    rooms.set(roomCode, { users: new Map(), password: password || null, createdAt: Date.now(), lastActivity: Date.now(), bannedUsers: new Set() });
+    rooms.set(roomCode, {
+      users: new Map(),
+      password: password || null,
+      createdAt: Date.now(),
+      lastActivity: Date.now(),
+      bannedUsers: new Set(),
+      auditLog: [],
+      voiceMessages: [],
+      analytics: { messages: 0, voiceMinutes: 0, joins: 0, peakUsers: 1 },
+      priority: false,
+      encrypted: false
+    });
     const room = rooms.get(roomCode);
     const avatarColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
     room.users.set(socket.id, { username, speaking: false, voiceEffect: 'none', isHost: true, device: null, location: null, avatarColor });
@@ -68,6 +97,8 @@ io.on('connection', (socket) => {
     socket.emit('room-joined', { roomCode, users: [username], isHost: true, isNew: true });
 
     console.log(`[${roomCode}] ${username} CREATED room [HOST]`);
+    addAuditLog(roomCode, 'create', username, 'Created room');
+    updateAnalytics(roomCode, 'join');
     broadcastActiveChannels();
   });
 
@@ -115,6 +146,8 @@ io.on('connection', (socket) => {
     socket.emit('request-user-info', {});
 
     console.log(`[${roomCode}] ${username} joined (${room.users.size} users)`);
+    addAuditLog(roomCode, 'join', username, `Joined (${room.users.size} users)`);
+    updateAnalytics(roomCode, 'join');
     broadcastActiveChannels();
   });
 
@@ -220,17 +253,111 @@ io.on('connection', (socket) => {
     if (!currentRoom || !text) return;
     const room = rooms.get(currentRoom);
     if (room) room.lastActivity = Date.now();
+    updateAnalytics(currentRoom, 'message');
+
+    // Bot commands
+    if (text.startsWith('/')) {
+      handleBotCommand(text.trim());
+      return;
+    }
+
+    addAuditLog(currentRoom, 'chat', currentUser, text.substring(0, 50));
     socket.to(currentRoom).emit('chat-message', { username: currentUser, text });
+
     // Special handling for SOS and Bell
     if (text.indexOf('SOS') > -1 || text.indexOf('EMERGENCY') > -1) {
       io.to(currentRoom).emit('alert', { type: 'sos', username: currentUser });
+      addAuditLog(currentRoom, 'sos', currentUser, 'SOS sent');
     } else if (text.indexOf('RING') > -1) {
       io.to(currentRoom).emit('alert', { type: 'bell', username: currentUser });
     }
   });
 
-  // Audio fallback (disabled - using pure WebRTC)
-  // socket.on('audio-chunk', ...)
+  // Voice messages
+  socket.on('voice-message', ({ audio, duration }) => {
+    if (!currentRoom || !audio) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.lastActivity = Date.now();
+    const msg = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), username: currentUser, audio, duration: duration || 0, time: Date.now() };
+    room.voiceMessages.push(msg);
+    if (room.voiceMessages.length > MAX_VOICE_MESSAGES) room.voiceMessages.shift();
+    addAuditLog(currentRoom, 'voice', currentUser, `Voice message (${Math.round(duration || 0)}s)`);
+    io.to(currentRoom).emit('voice-message', msg);
+  });
+
+  // Priority channel (host only)
+  socket.on('set-priority', ({ priority }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const user = room.users.get(socket.id);
+    if (!user || !user.isHost) return;
+    room.priority = !!priority;
+    io.to(currentRoom).emit('priority-changed', { priority: room.priority });
+    addAuditLog(currentRoom, 'priority', currentUser, priority ? 'Channel set as priority' : 'Priority removed');
+  });
+
+  // Encryption toggle (host only)
+  socket.on('set-encrypted', ({ encrypted }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const user = room.users.get(socket.id);
+    if (!user || !user.isHost) return;
+    room.encrypted = !!encrypted;
+    io.to(currentRoom).emit('encryption-changed', { encrypted: room.encrypted });
+  });
+
+  // Bot commands
+  function handleBotCommand(text) {
+    const parts = text.split(' ');
+    const cmd = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
+    let response = '';
+
+    switch (cmd) {
+      case '/help':
+        response = 'Commands: /help, /time, /joke, /weather [city], /users, /priority, /stats';
+        break;
+      case '/time':
+        response = 'Server time: ' + new Date().toLocaleString();
+        break;
+      case '/users':
+        const room = rooms.get(currentRoom);
+        response = `Online: ${room ? room.users.size : 0} users`;
+        break;
+      case '/joke':
+        const jokes = ['Why do programmers prefer dark mode? Because light attracts bugs!', 'Why was the JavaScript developer sad? Because he didn\'t Node how to Express himself!', 'What\'s a programmer\'s favorite hangout place? Foo Bar!'];
+        response = jokes[Math.floor(Math.random() * jokes.length)];
+        break;
+      case '/weather':
+        response = args ? `Weather for ${args}: Check https://wttr.in/${encodeURIComponent(args)} for live weather` : 'Usage: /weather [city]';
+        break;
+      case '/priority':
+        const r = rooms.get(currentRoom);
+        const u = r?.users.get(socket.id);
+        if (u?.isHost) {
+          r.priority = !r.priority;
+          io.to(currentRoom).emit('priority-changed', { priority: r.priority });
+          response = r.priority ? 'Channel set as PRIORITY' : 'Priority removed';
+        } else {
+          response = 'Only host can toggle priority';
+        }
+        break;
+      case '/stats':
+        const rm = rooms.get(currentRoom);
+        if (rm?.analytics) {
+          const a = rm.analytics;
+          response = `Stats: ${a.messages} messages, ${a.joins} joins, Peak: ${a.peakUsers} users`;
+        }
+        break;
+      default:
+        response = 'Unknown command. Type /help for options.';
+    }
+
+    socket.emit('chat-message', { username: '🤖 Bot', text: response });
+  }
 
   // Disconnect
   socket.on('disconnect', () => leaveRoom());
@@ -259,6 +386,7 @@ io.on('connection', (socket) => {
     }
 
     console.log(`[${currentRoom}] ${currentUser} left (${room.users.size} users)`);
+    addAuditLog(currentRoom, 'leave', currentUser, `Left (${room.users.size} users remaining)`);
 
     if (room.users.size === 0) {
       rooms.delete(currentRoom);
@@ -281,6 +409,27 @@ app.get('/api/rooms', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', rooms: rooms.size }));
+
+// Analytics endpoint
+app.get('/api/analytics/:room', (req, res) => {
+  const room = rooms.get(req.params.room.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  res.json({ analytics: room.analytics, priority: room.priority, encrypted: room.encrypted });
+});
+
+// Audit log endpoint
+app.get('/api/audit/:room', (req, res) => {
+  const room = rooms.get(req.params.room.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  res.json({ auditLog: room.auditLog.slice(-100) });
+});
+
+// Voice messages endpoint
+app.get('/api/voice-messages/:room', (req, res) => {
+  const room = rooms.get(req.params.room.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  res.json({ messages: room.voiceMessages.slice(-20) });
+});
 
 // Provide ICE servers config to clients
 app.get('/api/ice', (req, res) => {

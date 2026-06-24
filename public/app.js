@@ -47,6 +47,13 @@
   var mapPanel = null;
   var mapToggle = null;
 
+  // New features
+  var currentTheme = localStorage.getItem('wt-theme') || 'dark';
+  var currentRingtone = localStorage.getItem('wt-ringtone') || 'default';
+  var templates = JSON.parse(localStorage.getItem('wt-templates') || '[]');
+  var voiceRecorder = null;
+  var voiceChunks = [];
+
   function $(id) { return document.getElementById(id); }
 
   // DOM refs
@@ -57,6 +64,9 @@
   var usersList, hostUsersInfo, historyList, chatMessagesEl, chatInput, chatSend;
   var emojiBar, emojiOverlay, connectionStatus, speakingIndicator, speakingUserEl;
   var pttBtn, pttHint, volumeSlider, volumeValue, signalStrength, voiceFxOptions, remoteAudios;
+  // New panels
+  var analyticsToggle, analyticsPanel, auditToggle, auditPanel, voiceMsgToggle, voicePanel, settingsToggle, settingsPanel;
+  var auditList, voiceList, templateSelect, priorityBadge, encryptedBadge;
 
   // ---- Sounds ----
   function playBeep(freq, dur, type) {
@@ -103,6 +113,101 @@
     div.style.background = color || getAvatarColor(username);
     div.textContent = getInitials(username);
     return div;
+  }
+
+  // ---- Themes ----
+  function applyTheme(theme) {
+    document.body.className = 'theme-' + theme;
+    currentTheme = theme;
+    localStorage.setItem('wt-theme', theme);
+    document.querySelectorAll('.theme-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.theme === theme);
+    });
+  }
+
+  // ---- Ringtones ----
+  var ringtonePatterns = {
+    default: [880, 0.12, 1320, 0.12],
+    classic: [660, 0.08, 880, 0.08, 1100, 0.12],
+    digital: [1000, 0.05, 1200, 0.05, 1400, 0.05],
+    retro: [440, 0.1, 550, 0.1, 660, 0.1],
+    chime: [800, 0.15, 1000, 0.15],
+    alert: [1200, 0.08, 1200, 0.08, 1200, 0.08]
+  };
+  function playRingtone(type) {
+    var p = ringtonePatterns[type] || ringtonePatterns.default;
+    for (var i = 0; i < p.length; i += 2) {
+      (function(freq, dur, delay) {
+        setTimeout(function() { playBeep(freq, dur); }, delay);
+      })(p[i], p[i+1], i * 60);
+    }
+  }
+  function applyRingtone(tone) {
+    currentRingtone = tone;
+    localStorage.setItem('wt-ringtone', tone);
+    document.querySelectorAll('.ringtone-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.tone === tone);
+    });
+    playRingtone(tone);
+  }
+
+  // ---- Templates ----
+  function saveTemplate() {
+    var name = prompt('Template name:');
+    if (!name) return;
+    templates.push({ name: name, roomCode: roomCodeInput.value, password: roomPasswordInput.value, voiceEffect: VoiceFX.getCurrentEffect(), ringtone: currentRingtone });
+    localStorage.setItem('wt-templates', JSON.stringify(templates));
+    updateTemplateSelect();
+  }
+  function loadTemplate() {
+    var idx = templateSelect.selectedIndex;
+    if (idx <= 0) return;
+    var t = templates[idx - 1];
+    if (t) {
+      roomCodeInput.value = t.roomCode || '';
+      roomPasswordInput.value = t.password || '';
+      if (t.ringtone) applyRingtone(t.ringtone);
+    }
+  }
+  function deleteTemplate() {
+    var idx = templateSelect.selectedIndex;
+    if (idx <= 0) return;
+    templates.splice(idx - 1, 1);
+    localStorage.setItem('wt-templates', JSON.stringify(templates));
+    updateTemplateSelect();
+  }
+  function updateTemplateSelect() {
+    templateSelect.innerHTML = '<option value="">-- Select --</option>';
+    templates.forEach(function(t) {
+      var opt = document.createElement('option');
+      opt.textContent = t.name;
+      opt.value = t.name;
+      templateSelect.appendChild(opt);
+    });
+  }
+
+  // ---- Voice Messages ----
+  function startVoiceMessage() {
+    if (!rawStream) return;
+    voiceChunks = [];
+    voiceRecorder = new MediaRecorder(rawStream);
+    voiceRecorder.ondataavailable = function(e) { if (e.data.size > 0) voiceChunks.push(e.data); };
+    voiceRecorder.onstop = function() {
+      var blob = new Blob(voiceChunks, { type: 'audio/webm' });
+      var reader = new FileReader();
+      reader.onload = function() {
+        socket.emit('voice-message', { audio: reader.result, duration: voiceChunks.length * 0.1 });
+      };
+      reader.readAsDataURL(blob);
+    };
+    voiceRecorder.start();
+  }
+  function stopVoiceMessage() {
+    if (voiceRecorder && voiceRecorder.state === 'recording') voiceRecorder.stop();
+  }
+  function playVoiceMessage(audioUrl) {
+    var audio = new Audio(audioUrl);
+    audio.play().catch(function() {});
   }
 
   // ---- Map ----
@@ -437,6 +542,40 @@
       renderHostInfo(users);
       updateUserList(users.map(function(u) { return u.username; }));
     });
+
+    // Voice messages
+    socket.on('voice-message', function(d) {
+      var li = document.createElement('li');
+      li.className = 'voice-msg-item';
+      li.innerHTML = '<div class="voice-msg-header"><span>' + d.username + '</span><span>' + new Date(d.time).toLocaleTimeString() + '</span></div>';
+      var player = document.createElement('audio');
+      player.className = 'voice-msg-player';
+      player.controls = true;
+      player.src = d.audio;
+      li.appendChild(player);
+      voiceList.appendChild(li);
+      voiceList.scrollTop = voiceList.scrollHeight;
+    });
+
+    // Priority channel
+    socket.on('priority-changed', function(d) {
+      priorityBadge.classList.toggle('hidden', !d.priority);
+    });
+
+    // Encryption changed
+    socket.on('encryption-changed', function(d) {
+      encryptedBadge.classList.toggle('hidden', !d.encrypted);
+    });
+
+    // Audit event
+    socket.on('audit-event', function(d) {
+      var li = document.createElement('li');
+      li.className = 'audit-item';
+      var time = new Date(d.time).toLocaleTimeString();
+      li.innerHTML = '<span class="audit-time">' + time + '</span><span class="audit-event ' + d.event + '">' + d.event + '</span><span class="audit-details">' + d.username + ': ' + (d.details || '') + '</span>';
+      auditList.appendChild(li);
+      auditList.scrollTop = auditList.scrollHeight;
+    });
   }
 
   // ---- WebRTC (simple, reliable) ----
@@ -652,29 +791,54 @@
   }
 
   // ---- Panels ----
+  function hideAllPanels() {
+    [usersPanel, historyPanel, chatPanel, hostPanel, mapPanel, analyticsPanel, auditPanel, voicePanel, settingsPanel].forEach(function(p) { if (p) p.classList.add('hidden'); });
+  }
   function setupPanels() {
-    if (mapToggle) {
-      mapToggle.addEventListener('click', function() {
-        mapPanel.classList.toggle('hidden');
-        usersPanel.classList.add('hidden');
-        historyPanel.classList.add('hidden');
-        chatPanel.classList.add('hidden');
-        hostPanel.classList.add('hidden');
-        if (!mapPanel.classList.contains('hidden')) {
-          initMap();
-          setupMapTracking();
-        }
-      });
+    if (mapToggle) mapToggle.addEventListener('click', function() { hideAllPanels(); mapPanel.classList.toggle('hidden'); if (!mapPanel.classList.contains('hidden')) { initMap(); setupMapTracking(); } });
+    if (analyticsToggle) analyticsToggle.addEventListener('click', function() { hideAllPanels(); analyticsPanel.classList.toggle('hidden'); updateAnalytics(); });
+    if (auditToggle) auditToggle.addEventListener('click', function() { hideAllPanels(); auditPanel.classList.toggle('hidden'); });
+    if (voiceMsgToggle) voiceMsgToggle.addEventListener('click', function() { hideAllPanels(); voicePanel.classList.toggle('hidden'); });
+    if (settingsToggle) settingsToggle.addEventListener('click', function() { hideAllPanels(); settingsPanel.classList.toggle('hidden'); });
+
+    usersToggle.addEventListener('click', function() { hideAllPanels(); usersPanel.classList.toggle('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
+    historyToggle.addEventListener('click', function() { hideAllPanels(); historyPanel.classList.toggle('hidden'); });
+    chatToggle.addEventListener('click', function() { hideAllPanels(); chatPanel.classList.toggle('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
+
+    // Theme buttons
+    document.querySelectorAll('.theme-btn').forEach(function(b) {
+      b.addEventListener('click', function() { applyTheme(b.dataset.theme); });
+    });
+    // Ringtone buttons
+    document.querySelectorAll('.ringtone-btn').forEach(function(b) {
+      b.addEventListener('click', function() { applyRingtone(b.dataset.tone); });
+    });
+    // Template buttons
+    if (templateSelect) {
+      $('template-save').addEventListener('click', saveTemplate);
+      $('template-load').addEventListener('click', loadTemplate);
+      $('template-delete').addEventListener('click', deleteTemplate);
+      updateTemplateSelect();
     }
-    usersToggle.addEventListener('click', function() { usersPanel.classList.toggle('hidden'); historyPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
-    historyToggle.addEventListener('click', function() { historyPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); chatPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); });
-    chatToggle.addEventListener('click', function() { chatPanel.classList.toggle('hidden'); usersPanel.classList.add('hidden'); historyPanel.classList.add('hidden'); hostPanel.classList.add('hidden'); mapPanel.classList.add('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
+
     document.addEventListener('click', function(e) {
       if (!usersPanel.contains(e.target) && e.target !== usersToggle) usersPanel.classList.add('hidden');
       if (!historyPanel.contains(e.target) && e.target !== historyToggle) historyPanel.classList.add('hidden');
       if (isHost && !hostPanel.contains(e.target)) hostPanel.classList.add('hidden');
       if (!mapPanel.contains(e.target) && e.target !== mapToggle) mapPanel.classList.add('hidden');
     });
+  }
+
+  function updateAnalytics() {
+    if (!myRoom) return;
+    fetch('/api/analytics/' + myRoom).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.analytics) {
+        $('stat-messages').textContent = d.analytics.messages;
+        $('stat-joins').textContent = d.analytics.joins;
+        $('stat-peak').textContent = d.analytics.peakUsers;
+        $('stat-voice').textContent = Math.round(d.analytics.voiceMinutes) + 'm';
+      }
+    }).catch(function() {});
   }
 
   // ---- Quick Actions ----
@@ -748,6 +912,12 @@
     currentRoomEl = $('current-room'); hostBadge = $('host-badge'); userCountEl = $('user-count');
     usersToggle = $('users-toggle'); chatToggle = $('chat-toggle'); historyToggle = $('history-toggle'); leaveBtn = $('leave-btn');
     mapToggle = $('map-toggle'); mapPanel = $('map-panel');
+    analyticsToggle = $('analytics-toggle'); analyticsPanel = $('analytics-panel');
+    auditToggle = $('audit-toggle'); auditPanel = $('audit-panel');
+    voiceMsgToggle = $('voice-msg-toggle'); voicePanel = $('voice-panel');
+    settingsToggle = $('settings-toggle'); settingsPanel = $('settings-panel');
+    auditList = $('audit-list'); voiceList = $('voice-list'); templateSelect = $('template-select');
+    priorityBadge = $('priority-badge'); encryptedBadge = $('encrypted-badge');
     usersPanel = $('users-panel'); hostPanel = $('host-panel'); historyPanel = $('history-panel'); chatPanel = $('chat-panel');
     usersList = $('users-list'); hostUsersInfo = $('host-users-info'); historyList = $('history-list');
     chatMessagesEl = $('chat-messages'); chatInput = $('chat-input'); chatSend = $('chat-send');
@@ -756,6 +926,9 @@
     pttBtn = $('ptt-btn'); pttHint = $('ptt-hint');
     volumeSlider = $('volume-slider'); volumeValue = $('volume-value');
     signalStrength = $('signal-strength'); voiceFxOptions = $('voice-fx-options'); remoteAudios = $('remote-audios');
+
+    // Apply saved theme and ringtone
+    applyTheme(currentTheme);
 
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function() {});
     setupPTT(); setupPanels(); setupVolume(); setupChat(); setupVoiceFX(); setupQuickActions();
