@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Walkie-Talkie 📻</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- JOIN SCREEN -->
+  <div id="join-screen" class="screen active">
+    <div class="logo">
+      <div class="radio-icon">📻</div>
+      <h1>Walkie-Talkie</h1>
+      <p class="subtitle">Real-time push-to-talk</p>
+    </div>
+    <div class="form-group">
+      <label for="username">Your Callsign</label>
+      <input type="text" id="username" placeholder="e.g. Alpha-One" maxlength="20" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="room-code">Channel Code</label>
+      <input type="text" id="room-code" placeholder="e.g. ALPHA-007" maxlength="20" autocomplete="off" style="text-transform: uppercase;">
+    </div>
+    <div class="form-group">
+      <label for="room-password">Password <span class="optional">(optional)</span></label>
+      <input type="password" id="room-password" placeholder="Leave empty for public channel">
+    </div>
+    <div class="join-actions">
+      <button id="create-btn" class="btn-primary btn-create">👑 Create Room (Host)</button>
+      <div class="divider"><span>OR</span></div>
+      <button id="join-btn" class="btn-primary btn-join">🔌 Join Existing Room</button>
+    </div>
+    <div id="join-error" class="error-msg"></div>
+    <div id="socket-status-area"></div>
+
+    <div id="active-channels" class="active-channels hidden">
+      <h3>📡 Active Channels</h3>
+      <ul id="channels-list"></ul>
+    </div>
+  </div>
+
+  <!-- MAIN PTT SCREEN -->
+  <div id="ptt-screen" class="screen">
+    <header>
+      <div class="channel-info">
+        <span class="channel-label">CHANNEL</span>
+        <span id="current-room" class="channel-code">---</span>
+        <span id="host-badge" class="host-badge hidden">👑 HOST</span>
+      </div>
+      <div class="header-actions">
+        <div id="signal-strength" class="signal" title="Connection quality">
+          <span class="bar bar-1"></span>
+          <span class="bar bar-2"></span>
+          <span class="bar bar-3"></span>
+          <span class="bar bar-4"></span>
+        </div>
+        <button id="users-toggle" class="icon-btn" title="Users">👥 <span id="user-count">0</span></button>
+        <button id="chat-toggle" class="icon-btn" title="Chat">💬</button>
+        <button id="history-toggle" class="icon-btn" title="History">📋</button>
+        <button id="leave-btn" class="icon-btn danger" title="Leave">🚪</button>
+      </div>
+    </header>
+
+    <!-- Users Panel -->
+    <div id="users-panel" class="panel hidden">
+      <h3>Online Operators</h3>
+      <ul id="users-list"></ul>
+    </div>
+
+    <!-- Host Info Panel (host only) -->
+    <div id="host-panel" class="panel hidden">
+      <h3>👑 Connected Users Info</h3>
+      <div id="host-users-info"></div>
+    </div>
+
+    <!-- History Panel -->
+    <div id="history-panel" class="panel hidden">
+      <h3>Transmission Log</h3>
+      <ul id="history-list">
+        <li class="empty">No transmissions yet</li>
+      </ul>
+    </div>
+
+    <!-- Chat Panel -->
+    <div id="chat-panel" class="chat-panel hidden">
+      <div id="chat-messages"></div>
+      <div id="emoji-bar" class="emoji-bar">
+        <button class="emoji-btn" data-emoji="👍">👍</button>
+        <button class="emoji-btn" data-emoji="👋">👋</button>
+        <button class="emoji-btn" data-emoji="😂">😂</button>
+        <button class="emoji-btn" data-emoji="❤️">❤️</button>
+        <button class="emoji-btn" data-emoji="🔥">🔥</button>
+        <button class="emoji-btn" data-emoji="✅">✅</button>
+        <button class="emoji-btn" data-emoji="❌">❌</button>
+        <button class="emoji-btn" data-emoji="🆘">🆘</button>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="200" autocomplete="off">
+        <button id="chat-send" class="btn-send">➤</button>
+      </div>
+    </div>
+
+    <!-- Status Area -->
+    <div id="status-area">
+      <div id="connection-status" class="status-badge">🔄 Connecting...</div>
+      <div id="speaking-indicator" class="speaking-indicator hidden">
+        <div class="pulse-ring"></div>
+        <span>🔴 ON AIR</span>
+        <span id="speaking-user"></span>
+      </div>
+    </div>
+
+    <!-- Voice Effects Selector -->
+    <div id="voice-fx-bar">
+      <span class="fx-label">🎤 Voice:</span>
+      <div id="voice-fx-options">
+        <button class="fx-btn active" data-fx="none" title="Normal">🗣️</button>
+        <button class="fx-btn" data-fx="deep" title="Deep Man">🧔</button>
+        <button class="fx-btn" data-fx="lady" title="Lady">👩</button>
+        <button class="fx-btn" data-fx="girl" title="Girl">👧</button>
+        <button class="fx-btn" data-fx="boy" title="Boy">👦</button>
+        <button class="fx-btn" data-fx="child" title="Child">👶</button>
+        <button class="fx-btn" data-fx="oldman" title="Old Man">👴</button>
+        <button class="fx-btn" data-fx="robot" title="Robot">🤖</button>
+        <button class="fx-btn" data-fx="alien" title="Alien">👽</button>
+        <button class="fx-btn" data-fx="chipmunk" title="Chipmunk">🐿️</button>
+        <button class="fx-btn" data-fx="monster" title="Monster">👹</button>
+        <button class="fx-btn" data-fx="echo" title="Echo">🏔️</button>
+        <button class="fx-btn" data-fx="whisper" title="Whisper">🤫</button>
+        <button class="fx-btn" data-fx="megaphone" title="Megaphone">📣</button>
+      </div>
+    </div>
+
+    <!-- Quick Actions Bar -->
+    <div id="quick-actions">
+      <button id="btn-bell" class="quick-btn" title="Ring Bell">🔔</button>
+      <button id="btn-sos" class="quick-btn sos" title="SOS Emergency">🆘</button>
+      <button id="btn-location" class="quick-btn" title="Share Location">📍</button>
+      <button id="btn-record" class="quick-btn" title="Record">⏺️</button>
+    </div>
+
+    <!-- Volume Control -->
+    <div id="volume-control">
+      <span class="vol-icon">🔊</span>
+      <input type="range" id="volume-slider" min="0" max="100" value="80" class="vol-slider">
+      <span id="volume-value" class="vol-value">80%</span>
+    </div>
+
+    <!-- PTT Button -->
+    <div id="ptt-container">
+      <button id="ptt-btn" disabled>
+        <div class="ptt-inner">
+          <div class="ptt-icon">🎙️</div>
+          <div class="ptt-label">HOLD TO TALK</div>
+        </div>
+        <div class="ptt-ripple"></div>
+      </button>
+      <div id="ptt-hint">Press and hold to transmit</div>
+    </div>
+
+    <!-- Emoji Reaction Overlay -->
+    <div id="emoji-overlay" class="emoji-overlay hidden"></div>
+
+    <div id="remote-audios"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/voice-fx.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
