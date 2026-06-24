@@ -11,10 +11,18 @@
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.ekiga.net' },
+    { urls: 'stun:stun.ideasip.com' },
+    { urls: 'stun:stun.schlund.de' },
+    { urls: 'stun:stun.voiparound.com' },
+    { urls: 'stun:stun.voipbuster.com' },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:open.relay.me:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:open.relay.me:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:open.relay.me:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
   ];
 
   var socket = null;
@@ -274,13 +282,7 @@
       addChatMsg('', d.username + ' joined', false, true);
       if (d.socketId && d.socketId !== socket.id) {
         console.log('Creating peer for new user:', d.username, d.socketId);
-        var pc = createPeerConnection(d.socketId, d.username);
-        if (rawStream) {
-          var audioTrack = rawStream.getAudioTracks()[0];
-          if (audioTrack) {
-            pc.addTrack(audioTrack, rawStream);
-          }
-        }
+        createPeerConnection(d.socketId, d.username);
         negotiateWithPeer(d.socketId);
       }
     });
@@ -394,6 +396,14 @@
       console.log('Connection state [' + peerUsername + ']:', pc.connectionState);
       updateSignal();
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') { pc.close(); removePeer(peerId); }
+    };
+
+    pc.oniceconnectionstatechange = function() {
+      console.log('ICE state [' + peerUsername + ']:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.log('ICE failed, attempting restart for', peerUsername);
+        pc.restartIce();
+      }
     };
 
     peers.set(peerId, { pc: pc, remoteStream: remoteStream, audioEl: audioEl, username: peerUsername });
