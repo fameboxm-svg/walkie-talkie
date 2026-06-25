@@ -795,15 +795,37 @@
     [usersPanel, historyPanel, chatPanel, hostPanel, mapPanel, analyticsPanel, auditPanel, voicePanel, settingsPanel].forEach(function(p) { if (p) p.classList.add('hidden'); });
   }
   function setupPanels() {
-    if (mapToggle) mapToggle.addEventListener('click', function() { hideAllPanels(); mapPanel.classList.toggle('hidden'); if (!mapPanel.classList.contains('hidden')) { initMap(); setupMapTracking(); } });
-    if (analyticsToggle) analyticsToggle.addEventListener('click', function() { hideAllPanels(); analyticsPanel.classList.toggle('hidden'); updateAnalytics(); });
-    if (auditToggle) auditToggle.addEventListener('click', function() { hideAllPanels(); auditPanel.classList.toggle('hidden'); });
-    if (voiceMsgToggle) voiceMsgToggle.addEventListener('click', function() { hideAllPanels(); voicePanel.classList.toggle('hidden'); });
-    if (settingsToggle) settingsToggle.addEventListener('click', function() { hideAllPanels(); settingsPanel.classList.toggle('hidden'); });
+    // Hamburger menu toggle
+    var menuToggle = $('menu-toggle');
+    var menuDropdown = $('menu-dropdown-content');
+    if (menuToggle && menuDropdown) {
+      menuToggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        menuDropdown.classList.toggle('hidden');
+      });
+      // Close dropdown when clicking outside
+      document.addEventListener('click', function(e) {
+        if (!menuToggle.contains(e.target) && !menuDropdown.contains(e.target)) {
+          menuDropdown.classList.add('hidden');
+        }
+      });
+    }
 
-    usersToggle.addEventListener('click', function() { hideAllPanels(); usersPanel.classList.toggle('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
-    historyToggle.addEventListener('click', function() { hideAllPanels(); historyPanel.classList.toggle('hidden'); });
-    chatToggle.addEventListener('click', function() { hideAllPanels(); chatPanel.classList.toggle('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
+    // Close menu when clicking dropdown items
+    function closeMenu() { if (menuDropdown) menuDropdown.classList.add('hidden'); }
+
+    if (mapToggle) mapToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); mapPanel.classList.toggle('hidden'); if (!mapPanel.classList.contains('hidden')) { initMap(); setupMapTracking(); } });
+    if (analyticsToggle) analyticsToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); analyticsPanel.classList.toggle('hidden'); updateAnalytics(); });
+    if (auditToggle) auditToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); auditPanel.classList.toggle('hidden'); });
+    if (voiceMsgToggle) voiceMsgToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); voicePanel.classList.toggle('hidden'); });
+    if (settingsToggle) settingsToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); settingsPanel.classList.toggle('hidden'); });
+
+    usersToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); usersPanel.classList.toggle('hidden'); if (isHost) hostPanel.classList.toggle('hidden'); });
+    historyToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); historyPanel.classList.toggle('hidden'); });
+    chatToggle.addEventListener('click', function() { hideAllPanels(); closeMenu(); chatPanel.classList.toggle('hidden'); if (!chatPanel.classList.contains('hidden')) chatInput.focus(); });
+
+    // Leave button in dropdown
+    if ($('leave-btn')) $('leave-btn').addEventListener('click', function() { closeMenu(); handleLeave(); });
 
     // Theme buttons
     document.querySelectorAll('.theme-btn').forEach(function(b) {
@@ -937,7 +959,6 @@
     createBtn.addEventListener('click', function(e) { e.preventDefault(); handleCreate(); });
     roomCodeInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') handleJoin(); });
     usernameInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') roomCodeInput.focus(); });
-    leaveBtn.addEventListener('click', handleLeave);
     document.addEventListener('click', function() { if (audioContext && audioContext.state === 'suspended') audioContext.resume(); }, { once: true });
   }
 

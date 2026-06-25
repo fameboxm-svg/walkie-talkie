@@ -63,15 +63,20 @@
         </div>
         <span id="priority-badge" class="priority-badge hidden" title="Priority Channel">🔴</span>
         <span id="encrypted-badge" class="encrypted-badge hidden" title="Encrypted">🔒</span>
-        <button id="analytics-toggle" class="icon-btn" title="Analytics">📊</button>
-        <button id="audit-toggle" class="icon-btn" title="Audit Log">📋</button>
-        <button id="voice-msg-toggle" class="icon-btn" title="Voice Messages">🎤</button>
-        <button id="settings-toggle" class="icon-btn" title="Settings">⚙️</button>
-        <button id="map-toggle" class="icon-btn" title="Map">🗺️</button>
         <button id="users-toggle" class="icon-btn" title="Users">👥 <span id="user-count">0</span></button>
         <button id="chat-toggle" class="icon-btn" title="Chat">💬</button>
-        <button id="history-toggle" class="icon-btn" title="History">📋</button>
-        <button id="leave-btn" class="icon-btn danger" title="Leave">🚪</button>
+        <button id="map-toggle" class="icon-btn" title="Map">🗺️</button>
+        <div class="menu-dropdown">
+          <button id="menu-toggle" class="icon-btn" title="More">☰</button>
+          <div id="menu-dropdown-content" class="dropdown-content hidden">
+            <button id="analytics-toggle" class="dropdown-item">📊 Analytics</button>
+            <button id="audit-toggle" class="dropdown-item">📋 Audit Log</button>
+            <button id="voice-msg-toggle" class="dropdown-item">🎤 Voice Msgs</button>
+            <button id="settings-toggle" class="dropdown-item">⚙️ Settings</button>
+            <button id="history-toggle" class="dropdown-item">📋 History</button>
+            <button id="leave-btn" class="dropdown-item danger">🚪 Leave</button>
+          </div>
+        </div>
       </div>
     </header>
 
